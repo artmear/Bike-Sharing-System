@@ -1,0 +1,6 @@
+;; stations.nls
+;;
+;; Creates the stations and handles bike pick-ups and returns at the docks.
+
+to setup-stations
+end

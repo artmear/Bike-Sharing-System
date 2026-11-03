@@ -1,0 +1,10 @@
+;; metrics.nls
+;;
+;; Computes and records the indicators: availability, unmet demand,
+;; walking and waiting times, operational cost, utilization and equity.
+
+to setup-metrics
+end
+
+to update-metrics
+end

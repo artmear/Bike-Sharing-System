@@ -1,0 +1,9 @@
+;; demand.nls
+;;
+;; Generates user trip requests: when they happen, where they start and where they end.
+
+to setup-demand
+end
+
+to generate-demand
+end
