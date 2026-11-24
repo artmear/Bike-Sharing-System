@@ -4,11 +4,15 @@ Inputs are the parquet files from extract_bilbao.py, restricted to the
 days chosen by days.py and cleaned by clean.py.
 
 Outputs so far:
-- stations.csv:     station_id, name, xcor, ycor, capacity, initial_bikes, zone
+- stations.csv:     station_id, name, xcor, ycor, capacity, max_bikes,
+                    initial_bikes, zone
 - params.csv:       name, value (one parameter per row)
 - demand_rates.csv: station_id, hour, rate_per_hour
 - destinations.csv: origin_id, dest_id, band, prob
 - bands.csv:        hour, band (which time band each hour belongs to)
+- validation.csv:   station_id, minute_of_day, mean_bikes, mean_bikes_raw,
+                    share_empty, share_docks_full, share_full
+                    (observed, for model validation)
 
 Usage (from the repo root):
 
@@ -30,7 +34,13 @@ from config import (CENTER_LAT, CENTER_LON, DETOUR_FACTOR, NETLOGO_DATA_DIR,
                     WORLD_MIN_PYCOR)
 from days import selected_days
 
-STEPS = ["stations", "demand", "destinations"]
+STEPS = ["stations", "demand", "destinations", "validation"]
+
+# Width of the time bins in validation.csv, in minutes.
+VALIDATION_BIN_MIN = 10
+
+# max_bikes (docks + overflow) = this quantile of the observed bike count.
+MAX_BIKES_QUANTILE = 0.99
 
 # Demand correction: minimum hours with a bike available (summed over all
 # selected days) for a station-hour to get the corrected rate.
@@ -118,10 +128,33 @@ def bikes_per_minute() -> pd.DataFrame:
     return out[["station_id", "day", "minute", "hour", "bikes"]]
 
 
-def bikes_at_midnight() -> pd.Series:
-    """Mean docked bikes at 00:00 over the selected days, per station."""
+@cache
+def max_bikes_per_station() -> pd.Series:
+    """Most bikes a station can hold in the model, docks plus overflow.
+
+    In Bilbao people keep leaving bikes at a station after all docks are
+    taken (32 of 43 stations are above capacity more than 1% of the
+    time). The limit is the MAX_BIKES_QUANTILE of the observed count over
+    the selected days, rounded up and never below the number of docks.
+    The top 1% is ignored so that rare spikes do not set the limit.
+    """
     grid = bikes_per_minute()
-    return grid[grid["minute"] == 0].groupby("station_id")["bikes"].mean()
+    capacity = (pd.read_parquet(PROCESSED_DIR / "stations.parquet")
+                .set_index("station_id")["capacity"])
+    observed = grid.groupby("station_id")["bikes"].quantile(MAX_BIKES_QUANTILE)
+    return np.maximum(np.ceil(observed), capacity.loc[observed.index]).astype(int)
+
+
+def bikes_at_midnight() -> pd.Series:
+    """Mean docked bikes at 00:00 over the selected days, per station.
+
+    Each day's count is capped at max_bikes before averaging, the same
+    way as mean_bikes in validation.csv, so both start from the same value.
+    """
+    grid = bikes_per_minute()
+    at_00 = grid[grid["minute"] == 0]
+    capped = at_00["bikes"].clip(upper=at_00["station_id"].map(max_bikes_per_station()))
+    return capped.groupby(at_00["station_id"]).mean()
 
 
 def build_stations(out_dir: Path) -> tuple[pd.DataFrame, float]:
@@ -134,7 +167,8 @@ def build_stations(out_dir: Path) -> tuple[pd.DataFrame, float]:
     zone = np.where(dist_center <= dist_center.median(), "center", "periphery")
 
     mean_00 = bikes_at_midnight().loc[stations["station_id"]].to_numpy()
-    initial = np.minimum(np.round(mean_00), stations["capacity"]).astype(int)
+    initial = np.round(mean_00).astype(int)
+    max_bikes = max_bikes_per_station().loc[stations["station_id"]].to_numpy()
 
     out = pd.DataFrame({
         "station_id": stations["station_id"],
@@ -142,6 +176,7 @@ def build_stations(out_dir: Path) -> tuple[pd.DataFrame, float]:
         "xcor": xcor.round(2),
         "ycor": ycor.round(2),
         "capacity": stations["capacity"],
+        "max_bikes": max_bikes,
         "initial_bikes": initial,
         "zone": zone,
     })
@@ -152,8 +187,11 @@ def build_stations(out_dir: Path) -> tuple[pd.DataFrame, float]:
           f"ycor {out['ycor'].min()}..{out['ycor'].max()}")
     print(f"[stations] {meters_per_patch:.1f} m per patch, "
           f"map {(x_m.max() - x_m.min()) / 1000:.2f} x {(y_m.max() - y_m.min()) / 1000:.2f} km")
-    print(f"[stations] initial bikes {initial.sum()} of {out['capacity'].sum()} docks, "
-          f"{(np.round(mean_00) > stations['capacity']).sum()} station(s) capped")
+    extra = max_bikes - stations["capacity"].to_numpy()
+    print(f"[stations] {out['capacity'].sum()} docks + {extra.sum()} overflow places "
+          f"(p{MAX_BIKES_QUANTILE * 100:g} of observed bikes) at {(extra > 0).sum()} stations")
+    print(f"[stations] initial bikes {initial.sum()}, "
+          f"{(initial > out['capacity']).sum()} station(s) start above their docks")
     print(f"[stations] zones: {(zone == 'center').sum()} center, "
           f"{(zone == 'periphery').sum()} periphery "
           f"(split at {dist_center.median():.0f} m from the center)")
@@ -293,6 +331,57 @@ def build_destinations(out_dir: Path) -> pd.DataFrame:
     print(f"[destinations] saved {out_path} and bands.csv")
     return out
 
+
+def build_validation(out_dir: Path) -> pd.DataFrame:
+    """Observed bikes per station over the day, to compare with the model.
+
+    One row per station and 10-minute bin (minute_of_day = 0, 10, ..., 1430),
+    averaged over all minutes of the bin and all selected days:
+    - mean_bikes:       bikes at the station, capped at max_bikes (the model
+                        can never exceed it, so this is the comparable value)
+    - mean_bikes_raw:   bikes as reported, without the cap
+    - share_empty:      fraction of the time with 0 bikes
+    - share_docks_full: fraction of the time with all docks taken
+                        (bikes >= capacity; more bikes can still be left)
+    - share_full:       fraction of the time with bikes >= max_bikes
+                        (no room left at all: returns are redirected)
+    """
+    grid = bikes_per_minute()
+    capacity = (pd.read_parquet(PROCESSED_DIR / "stations.parquet")
+                .set_index("station_id")["capacity"])
+    cap = grid["station_id"].map(capacity)
+    limit = grid["station_id"].map(max_bikes_per_station())
+
+    grid = grid.assign(
+        minute_of_day=grid["minute"] // VALIDATION_BIN_MIN * VALIDATION_BIN_MIN,
+        capped=grid["bikes"].clip(upper=limit),
+        empty=grid["bikes"] == 0,
+        docks_full=grid["bikes"] >= cap,
+        full=grid["bikes"] >= limit,
+    )
+    out = (grid.groupby(["station_id", "minute_of_day"])
+           .agg(mean_bikes=("capped", "mean"),
+                mean_bikes_raw=("bikes", "mean"),
+                share_empty=("empty", "mean"),
+                share_docks_full=("docks_full", "mean"),
+                share_full=("full", "mean"))
+           .round(3)
+           .reset_index())
+    out_path = out_dir / "validation.csv"
+    out.to_csv(out_path, index=False)
+
+    total = out.groupby("minute_of_day")["mean_bikes"].sum()
+    print(f"[validation] {len(out)} rows ({out['station_id'].nunique()} stations x "
+          f"{out['minute_of_day'].nunique()} bins of {VALIDATION_BIN_MIN} min)")
+    print(f"[validation] docked bikes in the system: max {total.max():.0f} "
+          f"at {total.idxmax() // 60:02d}:{total.idxmax() % 60:02d}, "
+          f"min {total.min():.0f} at {total.idxmin() // 60:02d}:{total.idxmin() % 60:02d}")
+    print(f"[validation] stations empty {grid['empty'].mean():.1%}, "
+          f"all docks taken {grid['docks_full'].mean():.1%}, "
+          f"full up to max_bikes {grid['full'].mean():.1%} of the time")
+    print(f"[validation] saved {out_path}")
+    return out
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out-dir", type=Path, default=NETLOGO_DATA_DIR,
@@ -309,6 +398,8 @@ def main() -> None:
         build_demand_rates(args.out_dir)
     if "destinations" in args.steps:
         build_destinations(args.out_dir)
+    if "validation" in args.steps:
+        build_validation(args.out_dir)
 
 
 if __name__ == "__main__":
