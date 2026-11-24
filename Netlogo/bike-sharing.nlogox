@@ -105,7 +105,7 @@ to-report two-digits [ n ]
 end
 ]]></code>
   <widgets>
-    <view x="368" wrappingAllowedX="false" y="10" frameRate="30.0" minPycor="-42" height="517" showTickCounter="true" patchSize="6.0" fontSize="10" wrappingAllowedY="false" width="732" tickCounterLabel="minutes" maxPycor="42" updateMode="1" maxPxcor="60" minPxcor="-60"></view>
+    <view x="565" wrappingAllowedX="false" y="35" frameRate="30.0" minPycor="-42" height="517" showTickCounter="true" patchSize="6.0" fontSize="10" wrappingAllowedY="false" width="732" tickCounterLabel="minutes" maxPycor="42" updateMode="1" maxPxcor="60" minPxcor="-60"></view>
     <button x="110" y="10" height="40" disableUntilTicks="true" forever="true" kind="Observer" width="90">go</button>
     <button x="210" y="10" height="40" disableUntilTicks="true" forever="false" kind="Observer" width="55" display="step">go</button>
     <chooser x="10" y="90" height="60" variable="rebalancing-strategy" current="0" width="250" display="rebalancing-strategy">
@@ -113,44 +113,20 @@ end
       <choice type="string" value="nightly"></choice>
       <choice type="string" value="threshold"></choice>
     </chooser>
-    <slider x="1115" step="1" y="20" max="5" width="250" display="n-trucks" height="50" min="0" direction="Horizontal" default="1.0" variable="n-trucks"></slider>
-    <slider x="1115" step="0.1" y="200" max="2.0" width="250" display="demand-multiplier" height="50" min="0.5" direction="Horizontal" default="1.0" variable="demand-multiplier"></slider>
-    <slider x="1115" step="50" y="140" max="1000" width="250" display="max-walk-m" height="50" min="0" direction="Horizontal" default="300.0" variable="max-walk-m" units="m"></slider>
-    <slider x="1115" step="1" y="80" max="40" width="250" display="truck-capacity" height="50" min="5" direction="Horizontal" default="20.0" variable="truck-capacity" units="bikes"></slider>
-    <monitor x="10" precision="17" y="170" height="60" fontSize="11" width="100" display="Time">clock-string</monitor>
-    <monitor x="10" precision="0" y="245" height="60" fontSize="11" width="100" display="Requests">n-requests</monitor>
-    <monitor x="10" precision="0" y="315" height="60" fontSize="11" width="100" display="No bike">n-no-bike</monitor>
-    <monitor x="10" precision="1" y="390" height="60" fontSize="11" width="100" display="Walk (km)">precision (total-walk-m / 1000) 1</monitor>
-    <monitor x="10" precision="0" y="460" height="60" fontSize="11" width="100" display="Riding">count users</monitor>
-    <monitor x="10" precision="0" y="535" height="60" fontSize="11" width="100" display="No dock">n-no-dock</monitor>
-    <plot x="1645" autoPlotX="true" yMax="700.0" autoPlotY="true" yAxis="cumulative" y="20" xMin="0.0" height="175" legend="true" xMax="24.0" yMin="0.0" width="230" xAxis="hour" display="Unmet demand">
-      <setup></setup>
-      <update></update>
-      <pen interval="1.0" mode="0" display="no bike" color="-2674135" legend="true">
-        <setup></setup>
-        <update>plotxy ticks / 60 n-no-bike</update>
-      </pen>
-      <pen interval="1.0" mode="0" display="no dock" color="-13345367" legend="true">
-        <setup></setup>
-        <update>plotxy ticks / 60 n-no-dock</update>
-      </pen>
-    </plot>
-    <plot x="1395" autoPlotX="true" yMax="520.0" autoPlotY="true" yAxis="bikes" y="20" xMin="0.0" height="175" legend="true" xMax="24.0" yMin="0.0" width="230" xAxis="hour" display="Bikes">
-      <setup></setup>
-      <update></update>
-      <pen interval="1.0" mode="0" display="docked" color="-13345367" legend="true">
-        <setup></setup>
-        <update>plotxy ticks / 60 sum [n-bikes] of stations</update>
-      </pen>
-      <pen interval="1.0" mode="0" display="riding" color="-955883" legend="true">
-        <setup></setup>
-        <update>plotxy ticks / 60 count users</update>
-      </pen>
-    </plot>
-    <note x="810" y="530" backgroundDark="0" fontSize="12" width="285" markdown="false" height="80" textColorDark="-1" textColorLight="-16777216" backgroundLight="0">Stations: red = empty, green = ok,
-yellow = docks full (overflow), blue = full</note>
     <button x="10" y="10" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="90">setup</button>
-    <plot x="1395" autoPlotX="true" yMax="43.0" autoPlotY="true" yAxis="stations" y="215" xMin="0.0" height="175" legend="true" xMax="24.0" yMin="0.0" width="230" xAxis="hour" display="Empty / full stations">
+    <slider x="10" step="1" y="160" max="5" width="250" display="n-trucks" height="50" min="0" direction="Horizontal" default="1.0" variable="n-trucks"></slider>
+    <slider x="10" step="1" y="220" max="40" width="250" display="truck-capacity" height="50" min="5" direction="Horizontal" default="20.0" variable="truck-capacity" units="bikes"></slider>
+    <slider x="10" step="50" y="280" max="1000" width="250" display="max-walk-m" height="50" min="0" direction="Horizontal" default="300.0" variable="max-walk-m" units="m"></slider>
+    <slider x="10" step="0.1" y="340" max="2.0" width="250" display="demand-multiplier" height="50" min="0.5" direction="Horizontal" default="1.0" variable="demand-multiplier"></slider>
+    <note x="1010" y="565" backgroundDark="0" fontSize="12" width="285" markdown="false" height="80" textColorDark="-1" textColorLight="-16777216" backgroundLight="0">Stations: red = empty, green = ok,
+yellow = docks full (overflow), blue = full</note>
+    <monitor x="1310" precision="17" y="35" height="60" fontSize="11" width="100" display="Time">clock-string</monitor>
+    <monitor x="1310" precision="0" y="400" height="60" fontSize="11" width="100" display="No dock">n-no-dock</monitor>
+    <monitor x="1310" precision="0" y="325" height="60" fontSize="11" width="100" display="Riding">count users</monitor>
+    <monitor x="1310" precision="1" y="255" height="60" fontSize="11" width="100" display="Walk (km)">precision (total-walk-m / 1000) 1</monitor>
+    <monitor x="1310" precision="0" y="180" height="60" fontSize="11" width="100" display="No bike">n-no-bike</monitor>
+    <monitor x="1310" precision="0" y="110" height="60" fontSize="11" width="100" display="Requests">n-requests</monitor>
+    <plot x="90" autoPlotX="true" yMax="43.0" autoPlotY="true" yAxis="stations" y="695" xMin="0.0" height="410" legend="true" xMax="24.0" yMin="0.0" width="570" xAxis="hour" display="Empty / full stations">
       <setup></setup>
       <update></update>
       <pen interval="1.0" mode="0" display="empty" color="-2674135" legend="true">
@@ -164,6 +140,30 @@ yellow = docks full (overflow), blue = full</note>
       <pen interval="1.0" mode="0" display="full" color="-13345367" legend="true">
         <setup></setup>
         <update><![CDATA[plotxy ticks / 60 count stations with [n-bikes >= max-bikes]]]></update>
+      </pen>
+    </plot>
+    <plot x="725" autoPlotX="true" yMax="520.0" autoPlotY="true" yAxis="bikes" y="700" xMin="0.0" height="405" legend="true" xMax="24.0" yMin="0.0" width="500" xAxis="hour" display="Bikes">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="docked" color="-13345367" legend="true">
+        <setup></setup>
+        <update>plotxy ticks / 60 sum [n-bikes] of stations</update>
+      </pen>
+      <pen interval="1.0" mode="0" display="riding" color="-955883" legend="true">
+        <setup></setup>
+        <update>plotxy ticks / 60 count users</update>
+      </pen>
+    </plot>
+    <plot x="1290" autoPlotX="true" yMax="700.0" autoPlotY="true" yAxis="cumulative" y="685" xMin="0.0" height="440" legend="true" xMax="24.0" yMin="0.0" width="565" xAxis="hour" display="Unmet demand">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="no bike" color="-2674135" legend="true">
+        <setup></setup>
+        <update>plotxy ticks / 60 n-no-bike</update>
+      </pen>
+      <pen interval="1.0" mode="0" display="no dock" color="-13345367" legend="true">
+        <setup></setup>
+        <update>plotxy ticks / 60 n-no-dock</update>
       </pen>
     </plot>
   </widgets>
