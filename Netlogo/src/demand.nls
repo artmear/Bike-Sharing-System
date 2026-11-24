@@ -11,6 +11,21 @@ to setup-demand
   load-demand-rates
   load-bands
   load-destinations
+  load-speeds
+end
+
+;; speed-bands: list of [band-max-m speeds], shortest distance band first.
+;; Each band holds 100 percentiles of the real ride speeds for trips of
+;; that length; a ride draws one of them.
+to load-speeds
+  let rows csv:from-file "data/speeds.csv"
+  let header first rows
+  let by-band table:make
+  foreach but-first rows [ row ->
+    let key column row header "band_max_m"
+    table:put by-band key lput (column row header "speed_mps") (table:get-or-default by-band key [])
+  ]
+  set speed-bands sort-by [ [a b] -> first a < first b ] table:to-list by-band
 end
 
 ;; demand-rates: (list station-id hour) -> requests per hour
@@ -93,9 +108,75 @@ to handle-request [ stn ]
 end
 
 ;; A user starts riding from station stn (the bike is already taken).
-;; Rides are added in B6; for now the bike just leaves the system.
+;; The destination is drawn from the probabilities of the current band.
 to start-ride [ stn ]
+  let dest pick-destination stn
+  ask stn [
+    hatch-users 1 [
+      set origin stn
+      set destination dest
+      set intended dest
+      set arrival-minute ticks + ride-minutes stn dest
+      set color white
+      set size 2
+      set shape ifelse-value member? "bike" shapes [ "bike" ] [ "default" ]
+      face dest
+    ]
+  ]
 end
 
+;; Random destination for a trip starting at stn now, weighted by prob.
+to-report pick-destination [ stn ]
+  let options table:get destination-probs (list [station-id] of stn current-band)
+  let choice rnd:weighted-one-of-list options [ entry -> last entry ]
+  report table:get station-by-id first choice
+end
+
+;; Ride time in whole minutes (at least 1) between two places, with a
+;; speed drawn from the real speeds of rides of similar length.
+to-report ride-minutes [ from-agent to-agent ]
+  let meters distance-m from-agent to-agent
+  let seconds meters / random-ride-speed meters
+  report max (list 1 round (seconds / 60))
+end
+
+;; One random speed (m/s) from the distance band that contains meters.
+to-report random-ride-speed [ meters ]
+  let band first filter [ b -> first b >= meters ] speed-bands
+  report one-of last band
+end
+
+;; Each minute, riding users move towards their destination so that they
+;; reach it exactly at arrival-minute; then they try to return the bike.
 to move-users
+  ask users [
+    ifelse ticks >= arrival-minute [
+      arrive
+    ] [
+      face destination
+      fd distance destination / (arrival-minute - ticks)
+    ]
+  ]
+end
+
+;; The user is at the destination and tries to leave the bike.
+;; If the station is full (n-bikes = max-bikes), ride on to the nearest
+;; station with room; the walk from there back to the intended station
+;; counts as extra walking.
+to arrive
+  if return-bike destination [
+    if destination != intended [
+      set total-walk-m total-walk-m + distance-m destination intended
+    ]
+    die
+  ]
+  set n-no-dock n-no-dock + 1
+  let alt nearest-station-with-dock destination
+  if alt = nobody [            ; every station full: try again next minute
+    set arrival-minute ticks + 1
+    stop
+  ]
+  set arrival-minute ticks + ride-minutes destination alt
+  set destination alt
+  face alt
 end

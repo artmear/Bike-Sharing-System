@@ -90,6 +90,18 @@ def check_params(c: Checker, params: dict, st: pd.DataFrame) -> None:
             f"max error {err.max():.2%} over {len(err)} station pairs")
 
 
+def check_speeds(c: Checker, speeds: pd.DataFrame) -> None:
+    print("speeds.csv")
+    per_band = speeds.groupby("band_max_m").size()
+    c.check("distance bands with the same number of speeds",
+            len(per_band) >= 1 and per_band.nunique() == 1,
+            f"{len(per_band)} bands x {per_band.iloc[0]} speeds")
+    c.check("last band is open (very large limit)", speeds["band_max_m"].max() >= 100_000)
+    c.check("speeds are positive and below 10 m/s",
+            speeds["speed_mps"].between(0, 10, inclusive="right").all(),
+            f"{speeds['speed_mps'].min()}..{speeds['speed_mps'].max()} m/s")
+
+
 def check_demand(c: Checker, rates: pd.DataFrame, ids: set) -> None:
     print("demand_rates.csv")
     c.check("one row per station and hour",
@@ -157,6 +169,7 @@ def main() -> None:
     c = Checker()
     check_stations(c, st)
     check_params(c, params, st)
+    check_speeds(c, pd.read_csv(d / "speeds.csv"))
     check_demand(c, pd.read_csv(d / "demand_rates.csv"), ids)
     check_destinations(c, pd.read_csv(d / "destinations.csv"), pd.read_csv(d / "bands.csv"), ids)
     check_validation(c, pd.read_csv(d / "validation.csv"), st)

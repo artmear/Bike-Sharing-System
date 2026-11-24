@@ -12,10 +12,12 @@
 to setup-stations
   load-params
 
+  set station-by-id table:make
   let rows csv:from-file "data/stations.csv"
   let header first rows
   foreach but-first rows [ row ->
     create-stations 1 [
+      table:put station-by-id (column row header "station_id") self
       set station-id    column row header "station_id"
       set station-name  column row header "name"
       setxy (column row header "xcor") (column row header "ycor")

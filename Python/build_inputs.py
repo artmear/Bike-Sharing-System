@@ -7,6 +7,7 @@ Outputs so far:
 - stations.csv:     station_id, name, xcor, ycor, capacity, max_bikes,
                     initial_bikes, zone
 - params.csv:       name, value (one parameter per row)
+- speeds.csv:       band_max_m, speed_mps (ride speeds to draw from, by distance)
 - demand_rates.csv: station_id, hour, rate_per_hour
 - destinations.csv: origin_id, dest_id, band, prob
 - bands.csv:        hour, band (which time band each hour belongs to)
@@ -41,6 +42,11 @@ VALIDATION_BIN_MIN = 10
 
 # max_bikes (docks + overflow) = this quantile of the observed bike count.
 MAX_BIKES_QUANTILE = 0.99
+
+# speeds.csv: distance bands (same number of trips each) and speeds per band.
+SPEED_DISTANCE_BANDS = 5
+SPEED_PERCENTILES = 100
+OPEN_BAND_MAX_M = 1_000_000  # "no upper limit" for the last band
 
 # Demand correction: minimum hours with a bike available (summed over all
 # selected days) for a station-hour to get the corrected rate.
@@ -222,7 +228,51 @@ def build_params(out_dir: Path, meters_per_patch: float) -> pd.DataFrame:
           f"{speed.median() * 3.6 / DETOUR_FACTOR:.1f} km/h straight line), "
           f"from {len(trips):,} trips")
     print(f"[params] saved {out_path}")
+
+    build_speeds(out_dir, trips)
     return params
+
+
+def build_speeds(out_dir: Path, trips: pd.DataFrame) -> pd.DataFrame:
+    """Distribution of ride speeds, by distance band, for drawing ride times.
+
+    A single speed (the median) makes every ride as fast as a typical one,
+    but some riders stop or take detours: real rides last 15.9 min on
+    average against 11.9 min with the median speed, and the model would
+    have ~40% fewer bikes on the road at peak hours. So each simulated
+    ride draws its own speed.
+
+    Short trips are slower (2.1 m/s in the shortest quarter, 3.4 m/s in
+    the longest), so speeds are drawn within the trip's distance band:
+    SPEED_DISTANCE_BANDS bands with the same number of trips, each with
+    SPEED_PERCENTILES evenly spaced percentiles of its speeds.
+
+    speeds.csv: band_max_m (upper street distance of the band, the last
+    one is open), speed_mps. NetLogo picks the first band with
+    band_max_m >= distance and draws one of its speeds at random.
+    """
+    street_m = trips["distance"] * DETOUR_FACTOR
+    speed = street_m / trips["duration"]
+
+    edges = np.quantile(street_m, np.linspace(0, 1, SPEED_DISTANCE_BANDS + 1))
+    band_max = [int(round(e)) for e in edges[1:-1]] + [OPEN_BAND_MAX_M]
+    band = np.searchsorted(edges[1:-1], street_m, side="right")
+
+    levels = (np.arange(SPEED_PERCENTILES) + 0.5) * 100 / SPEED_PERCENTILES
+    rows = []
+    for b, top in enumerate(band_max):
+        for v in np.percentile(speed[band == b], levels):
+            rows.append({"band_max_m": top, "speed_mps": round(v, 3)})
+    out = pd.DataFrame(rows)
+    out_path = out_dir / "speeds.csv"
+    out.to_csv(out_path, index=False)
+
+    medians = out.groupby("band_max_m")["speed_mps"].median()
+    print(f"[speeds] {SPEED_DISTANCE_BANDS} distance bands (limits "
+          f"{[int(m) for m in band_max[:-1]]} m) x {SPEED_PERCENTILES} speeds; "
+          f"band medians {medians.round(2).tolist()} m/s")
+    print(f"[speeds] saved {out_path}")
+    return out
 
 
 def build_demand_rates(out_dir: Path) -> pd.DataFrame:
