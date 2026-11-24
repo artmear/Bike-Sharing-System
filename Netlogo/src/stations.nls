@@ -2,5 +2,90 @@
 ;;
 ;; Creates the stations and handles bike pick-ups and returns at the docks.
 
+to load-stations-from-csv [csv-file]
+  if not file-exists? csv-file [
+    print (word "ERROR: File not found: " csv-file)
+    stop
+  ]
+  
+  file-open csv-file
+  let header file-read-line  ; Skip header
+  
+  let row-count 0
+  let valid-count 0
+  let all-lons []
+  let all-lats []
+  while [not file-at-end?] [
+    let line file-read-line
+    let row csv:from-row line
+    
+    if length row > 10 [
+      let id item 0 row
+      let name item 2 row
+      let bike-racks item 6 row
+      let lon item 9 row
+      let lat item 10 row
+      
+      ; Only create stations with valid capacity
+      if bike-racks != "" and bike-racks != 0 [
+        ; Check if coordinates are valid
+        if lon > -180 and lon < 180 and lat > -90 and lat < 90 [
+          create-stations 1 [
+            set station-id id
+            set station-name name
+            set station-longitude lon
+            set station-latitude lat
+            set station-capacity bike-racks
+            set bikes-available station-capacity
+          ]
+          set all-lons lput lon all-lons
+          set all-lats lput lat all-lats
+          set valid-count valid-count + 1
+        ]
+      ]
+        set row-count row-count + 1
+    ]
+  ]
+  
+  file-close
+
+  print (word "Loaded " row-count " stations.")
+
+  ; Calculate bounds from all stations
+  if row-count > 0 [
+    let local-min-lon min all-lons
+    let local-max-lon max all-lons
+    let local-min-lat min all-lats
+    let local-max-lat max all-lats
+    
+    print (word "Bounds: lon [" local-min-lon ", " local-max-lon "] lat [" local-min-lat ", " local-max-lat "]")
+    
+    ; Position all stations
+    ask stations [
+      position-on-map-with-bounds local-min-lon local-max-lon local-min-lat local-max-lat
+      set hidden? false  ; Show after positioned
+    ]
+  ]
+end
+
+to position-on-map-with-bounds [lon-min lon-max lat-min lat-max]
+  ; Convert real-world coordinates to NetLogo world
+  let lon-range (lon-max - lon-min)
+  let lat-range (lat-max - lat-min)
+  
+  if lon-range > 0 and lat-range > 0 [
+    ; Scale to fit in world (-16 to 16)
+    set xcor ((station-longitude - lon-min) / lon-range) * 32 - 16
+    set ycor ((station-latitude - lat-min) / lat-range) * 32 - 16
+  ]
+  
+  ; Visual appearance
+  set color green
+  set size 0.3
+  ;; set label station-id
+end
+
+
 to setup-stations
+  load-stations-from-csv "../Data/filtered/Berlin/stations.csv"
 end

@@ -6,6 +6,9 @@
 ;; The model logic lives in the src/ files, one owner per file,
 ;; so merge conflicts stay rare.
 
+
+extensions [csv]
+
 __includes [
   "src/stations.nls"
   "src/demand.nls"
@@ -17,6 +20,10 @@ __includes [
 ;; so agree on them with the group before editing.
 
 globals [
+  min-lon
+  max-lon
+  min-lat
+  max-lat
 ]
 
 breed [ stations station ]
@@ -24,6 +31,14 @@ breed [ bikes bike ]
 breed [ users user ]
 
 stations-own [
+  station-id              ; Station ID from CSV
+  station-name            ; Station name
+  station-longitude       ; Real-world longitude
+  station-latitude        ; Real-world latitude
+  station-capacity        ; Total bike capacity
+  bikes-current           ; Bikes currently at station
+  bikes-available         ; Bikes available for pickup
+  empty-docks             ; Empty parking docks
 ]
 
 bikes-own [
@@ -34,6 +49,16 @@ users-own [
 
 to setup
   clear-all
+
+  set-default-shape stations "circle"
+
+  ; Initialize global bounds
+  set min-lon 999
+  set max-lon -999
+  set min-lat 999
+  set max-lat -999
+
+
   setup-stations
   setup-demand
   setup-rebalancing
@@ -47,6 +72,7 @@ to go
   update-metrics
   tick
 end
+
 </code>
   <widgets>
     <view x="368" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="-16" height="434" showTickCounter="true" patchSize="13.0" fontSize="10" wrappingAllowedY="true" width="434" tickCounterLabel="ticks" maxPycor="16" updateMode="0" maxPxcor="16" minPxcor="-16"></view>
