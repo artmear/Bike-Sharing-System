@@ -63,7 +63,38 @@ end
 ;; Each tick
 ;; ---------------------------------------------------------------------------
 
+;; Each minute, each station receives a random number of rental requests.
+;; The number follows a Poisson distribution with mean
+;; (requests per hour / 60) x demand-multiplier.
 to generate-demand
+  ask stations [
+    let mean-requests current-rate self / 60 * demand-multiplier
+    repeat random-poisson mean-requests [ handle-request self ]
+  ]
+end
+
+;; A user wants a bike at station stn.
+;; 1. If stn has a bike, take it.
+;; 2. Otherwise walk to the nearest station with a bike within max-walk-m.
+;; 3. If there is none, give up (unmet demand: no bike).
+to handle-request [ stn ]
+  set n-requests n-requests + 1
+  if take-bike stn [
+    start-ride stn
+    stop
+  ]
+  let alt nearest-station-with-bike stn max-walk-m
+  ifelse alt != nobody and take-bike alt [
+    set total-walk-m total-walk-m + distance-m stn alt
+    start-ride alt
+  ] [
+    set n-no-bike n-no-bike + 1
+  ]
+end
+
+;; A user starts riding from station stn (the bike is already taken).
+;; Rides are added in B6; for now the bike just leaves the system.
+to start-ride [ stn ]
 end
 
 to move-users
