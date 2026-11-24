@@ -7,6 +7,8 @@ Outputs so far:
 - stations.csv:     station_id, name, xcor, ycor, capacity, initial_bikes, zone
 - params.csv:       name, value (one parameter per row)
 - demand_rates.csv: station_id, hour, rate_per_hour
+- destinations.csv: origin_id, dest_id, band, prob
+- bands.csv:        hour, band (which time band each hour belongs to)
 
 Usage (from the repo root):
 
@@ -28,11 +30,24 @@ from config import (CENTER_LAT, CENTER_LON, DETOUR_FACTOR, NETLOGO_DATA_DIR,
                     WORLD_MIN_PYCOR)
 from days import selected_days
 
-STEPS = ["stations", "demand"]
+STEPS = ["stations", "demand", "destinations"]
 
 # Demand correction: minimum hours with a bike available (summed over all
 # selected days) for a station-hour to get the corrected rate.
 MIN_AVAILABLE_H = 2.0
+
+# Time bands for the destination choice: hour of day -> band name.
+BANDS = {
+    "morning": range(6, 10),
+    "midday": range(10, 16),
+    "evening": range(16, 20),
+    "night": [*range(20, 24), *range(0, 6)],
+}
+HOUR_TO_BAND = {h: band for band, hours in BANDS.items() for h in hours}
+
+# Smoothing weight, in trips, given to the all-day destination
+# distribution when estimating each band's distribution.
+SMOOTHING_TRIPS = 20
 
 # Meters per degree (equirectangular approximation, fine at city scale).
 M_PER_DEG_LAT = 110_574
@@ -224,6 +239,60 @@ def build_demand_rates(out_dir: Path) -> pd.DataFrame:
     print(f"[demand] saved {out_path}")
     return out
 
+
+def build_destinations(out_dir: Path) -> pd.DataFrame:
+    """Probability of each destination given the origin and the time band.
+
+    Destinations change a lot during the day (e.g. morning trips go to
+    work areas), so there is one distribution per band. Some origins have
+    few trips in a band, so each band's counts are smoothed towards the
+    all-day distribution:
+
+        prob(d | o, band) = (n(o, d, band) + K * p_all(d | o)) / (n(o, band) + K)
+
+    with K = SMOOTHING_TRIPS. With many trips the band's own data
+    dominates; with few, the all-day pattern fills the gaps.
+
+    Also writes bands.csv (hour, band) so NetLogo knows which band
+    applies at each hour.
+    """
+    trips = load_study_trips()
+    od = pd.DataFrame({
+        "origin_id": trips["station_id_start"].astype("int64"),
+        "dest_id": trips["station_id_end"].astype("int64"),
+        "band": trips["start"].dt.hour.map(HOUR_TO_BAND),
+    })
+
+    n_all = od.groupby(["origin_id", "dest_id"]).size().rename("n_all").reset_index()
+    n_all["p_all"] = n_all["n_all"] / n_all.groupby("origin_id")["n_all"].transform("sum")
+
+    # Every (origin, destination) pair seen during the day, in every band.
+    grid = n_all.merge(pd.DataFrame({"band": list(BANDS)}), how="cross")
+    n_band = od.groupby(["origin_id", "dest_id", "band"]).size().rename("n").reset_index()
+    grid = grid.merge(n_band, on=["origin_id", "dest_id", "band"], how="left").fillna({"n": 0})
+    n_origin = grid.groupby(["origin_id", "band"])["n"].transform("sum")
+
+    grid["prob"] = (grid["n"] + SMOOTHING_TRIPS * grid["p_all"]) / (n_origin + SMOOTHING_TRIPS)
+
+    out = (grid[["origin_id", "dest_id", "band", "prob"]]
+           .sort_values(["origin_id", "band", "prob"], ascending=[True, True, False])
+           .round({"prob": 6}))
+    out_path = out_dir / "destinations.csv"
+    out.to_csv(out_path, index=False)
+
+    bands = pd.DataFrame({"hour": range(24), "band": [HOUR_TO_BAND[h] for h in range(24)]})
+    bands.to_csv(out_dir / "bands.csv", index=False)
+
+    sums = out.groupby(["origin_id", "band"])["prob"].sum()
+    trips_per_cell = od.groupby(["origin_id", "band"]).size()
+    print(f"[destinations] {len(out)} rows: {out['origin_id'].nunique()} origins x "
+          f"{len(BANDS)} bands, {len(n_all)} of {43 * 42} possible pairs")
+    print(f"[destinations] trips per origin and band: min {trips_per_cell.min()}, "
+          f"median {trips_per_cell.median():.0f}; probabilities sum to "
+          f"{sums.min():.4f}..{sums.max():.4f}")
+    print(f"[destinations] saved {out_path} and bands.csv")
+    return out
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out-dir", type=Path, default=NETLOGO_DATA_DIR,
@@ -238,6 +307,8 @@ def main() -> None:
         build_params(args.out_dir, meters_per_patch)
     if "demand" in args.steps:
         build_demand_rates(args.out_dir)
+    if "destinations" in args.steps:
+        build_destinations(args.out_dir)
 
 
 if __name__ == "__main__":
