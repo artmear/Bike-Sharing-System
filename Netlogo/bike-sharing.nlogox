@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <model version="NetLogo 7.0.4" snapToGrid="true">
-  <code>;; Bike-Sharing System: operations and rebalancing simulation
+  <code>;; Bike-Sharing System: operations and rebalancing simulation (Bilbao)
 ;;
 ;; This file holds the shared declarations and the main setup/go loop.
-;; The model logic lives in the src/ files, one owner per file,
-;; so merge conflicts stay rare.
+;; The model logic lives in the src/ files, organized by topic.
+;; 1 tick = 1 minute; one run = one day = 1440 ticks from 00:00.
+
+extensions [ csv table ]
 
 __includes [
   "src/stations.nls"
@@ -13,23 +15,51 @@ __includes [
   "src/metrics.nls"
 ]
 
-;; Shared declarations. Changes here affect everyone,
-;; so agree on them with the group before editing.
+;; Shared declarations (agreed with the group, see CLAUDE.md).
+;; Adding is fine; renaming or removing must be agreed first.
+;; Interface sliders and choosers are globals already: do not declare them here.
 
 globals [
+  ;; time (1 tick = 1 minute)
+  minute-of-day      ; 0..1439
+  hour-of-day        ; 0..23
+  meters-per-patch
+  ride-speed-mps
+  detour-factor
+  ;; input data
+  demand-rates       ; table: station-id + hour -> trips per hour
+  destination-probs  ; table: (list origin-id band) -> list of [dest-id prob]
+  ;; metric counters
+  n-requests         ; rental requests
+  n-no-bike          ; gave up: no bike nearby
+  n-no-dock          ; return redirected: station full (n-bikes = max-bikes)
+  total-walk-m       ; extra walking caused by detours
+  truck-km           ; km driven by rebalancing trucks
 ]
 
 breed [ stations station ]
-breed [ bikes bike ]
-breed [ users user ]
+breed [ users user ]       ; only exist while riding
+breed [ trucks truck ]     ; rebalancing trucks
 
 stations-own [
-]
-
-bikes-own [
+  station-id         ; original dataset id
+  capacity           ; bike_racks + special_racks (physical docks)
+  max-bikes          ; docks + overflow: bikes can still be left until this limit
+  n-bikes            ; bikes at the station now (only changed in stations.nls)
+  zone               ; "center" or "periphery"
+  minutes-empty
+  minutes-full       ; minutes with n-bikes &gt;= max-bikes
 ]
 
 users-own [
+  origin             ; station agent
+  destination        ; station agent
+  arrival-minute     ; tick when the ride ends
+]
+
+trucks-own [
+  load               ; bikes on board
+  target             ; station agent it is heading to
 ]
 
 to setup
@@ -39,13 +69,34 @@ to setup
   setup-rebalancing
   setup-metrics
   reset-ticks
+  update-clock
 end
 
 to go
+  if ticks &gt;= 1440 [ stop ]
+  update-clock
   generate-demand
+  move-users
   rebalance
   update-metrics
+  update-station-colors
   tick
+end
+
+;; Time of day from the tick counter.
+to update-clock
+  set minute-of-day ticks mod 1440
+  set hour-of-day floor (minute-of-day / 60)
+end
+
+;; "HH:MM" for the Time monitor.
+to-report clock-string
+  report (word two-digits hour-of-day ":" two-digits (minute-of-day mod 60))
+end
+
+;; 7 -> "07", 12 -> "12"
+to-report two-digits [ n ]
+  report substring (word (100 + n)) 1 3
 end
 </code>
   <widgets>
