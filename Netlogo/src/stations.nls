@@ -47,6 +47,64 @@ to-report column [ row header col-name ]
 end
 
 ;; ---------------------------------------------------------------------------
+;; Bikes in and out (the only code that changes n-bikes)
+;; ---------------------------------------------------------------------------
+
+;; A user takes one bike from stn. Reports true if there was one.
+to-report take-bike [ stn ]
+  if [n-bikes] of stn = 0 [ report false ]
+  ask stn [ set n-bikes n-bikes - 1 ]
+  report true
+end
+
+;; A user leaves one bike at stn: in a free dock or, when all docks are
+;; taken, as overflow, up to max-bikes. Reports true if there was room.
+to-report return-bike [ stn ]
+  if [n-bikes] of stn >= [max-bikes] of stn [ report false ]
+  ask stn [ set n-bikes n-bikes + 1 ]
+  report true
+end
+
+;; A truck loads up to n bikes from stn. Reports how many it actually took.
+to-report load-bikes [ stn n ]
+  let moved min (list n [n-bikes] of stn)
+  ask stn [ set n-bikes n-bikes - moved ]
+  report moved
+end
+
+;; A truck unloads up to n bikes at stn, into free docks only (an operator
+;; does not create overflow on purpose). Reports how many it left.
+to-report unload-bikes [ stn n ]
+  let moved max (list 0 (min (list n ([capacity] of stn - [n-bikes] of stn))))
+  ask stn [ set n-bikes n-bikes + moved ]
+  report moved
+end
+
+;; ---------------------------------------------------------------------------
+;; Distances and nearest stations
+;; ---------------------------------------------------------------------------
+
+;; Distance in meters along the streets: straight line x detour factor.
+to-report distance-m [ a b ]
+  report [distance b] of a * meters-per-patch * detour-factor
+end
+
+;; Nearest other station with a bike to rent, at most max-m meters away
+;; from stn, or nobody.
+to-report nearest-station-with-bike [ stn max-m ]
+  let candidates stations with [
+    self != stn and n-bikes > 0 and distance-m stn self <= max-m
+  ]
+  report min-one-of candidates [ distance-m stn self ]
+end
+
+;; Nearest other station with room to leave a bike, or nobody.
+to-report nearest-station-with-dock [ stn ]
+  let candidates stations with [ self != stn and n-bikes < max-bikes ]
+  report min-one-of candidates [ distance-m stn self ]
+end
+
+;; ---------------------------------------------------------------------------
 ;; Display
 ;; ---------------------------------------------------------------------------
 
