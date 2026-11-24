@@ -19,7 +19,7 @@ import pandas as pd
 
 from config import CITY_ID, EXCLUDED_STATION_IDS, FULL_DIR, PROCESSED_DIR
 
-STEPS = ["stations", "trips"]
+STEPS = ["stations", "trips", "status"]
 
 # Rows read per chunk. About 2M rows x 7 columns stays well under 200 MB.
 CHUNK_ROWS = 2_000_000
@@ -35,6 +35,21 @@ TRIP_COLUMNS = {
     "duration": "float64",         # seconds
     "distance": "float64",         # meters, straight line
 }
+
+# station_status.csv has no city column, so rows are matched by station id.
+# Counts are read as float (to survive empty values), then made Int16.
+STATUS_COLUMNS = {
+    "station_id": "int64",
+    "time": "float64",             # epoch seconds UTC
+    "bikes": "float32",            # bikes docked
+    "booked_bikes": "float32",
+    "bikes_available_to_rent": "float32",
+    "free_racks": "float32",
+    "free_special_racks": "float32",
+    "maintenance": "boolean",      # "true"/"false" -> True/False
+}
+STATUS_COUNTS = ["bikes", "booked_bikes", "bikes_available_to_rent",
+                 "free_racks", "free_special_racks"]
 
 
 def extract_stations(data_dir: Path, out_dir: Path) -> pd.DataFrame:
@@ -131,6 +146,57 @@ def extract_trips(data_dir: Path, out_dir: Path) -> pd.DataFrame:
     return trips
 
 
+def extract_status(data_dir: Path, out_dir: Path, station_ids: set) -> pd.DataFrame:
+    """Keep the snapshots of Bilbao's stations, reading in chunks.
+
+    station_status.csv has about 38M rows (1.6 GB) and no city column,
+    so each chunk is filtered by the station ids found by
+    extract_stations (the test station is therefore already left out).
+    """
+    reader = pd.read_csv(
+        data_dir / "station_status.csv",
+        usecols=list(STATUS_COLUMNS),
+        dtype=STATUS_COLUMNS,
+        chunksize=CHUNK_ROWS,
+    )
+
+    parts = []
+    n_read = 0
+    t0 = time.time()
+    for chunk in reader:
+        n_read += len(chunk)
+        parts.append(chunk[chunk["station_id"].isin(station_ids)])
+        print(f"\r[status] read {n_read:>12,} rows, "
+              f"Bilbao so far {sum(len(p) for p in parts):>10,} "
+              f"({time.time() - t0:.0f} s)", end="", flush=True)
+    print()
+
+    status = pd.concat(parts, ignore_index=True)
+    status["time"] = status["time"].round().astype("int64")
+    n_missing = status[STATUS_COUNTS].isna().any(axis=1).sum()
+    for col in STATUS_COUNTS:
+        status[col] = status[col].astype("Int16")
+
+    n_before = len(status)
+    status = (status.drop_duplicates(["station_id", "time"])
+              .sort_values(["station_id", "time"])
+              .reset_index(drop=True))
+
+    out_path = out_dir / "station_status.parquet"
+    status.to_parquet(out_path, index=False)
+
+    print(f"[status] {len(status):,} snapshots kept for "
+          f"{status['station_id'].nunique()} of {len(station_ids)} stations, "
+          f"{n_before - len(status)} duplicates dropped, "
+          f"{n_missing} with a missing count")
+    if len(status):
+        first, last = pd.to_datetime(status["time"].agg(["min", "max"]),
+                                     unit="s", utc=True)
+        print(f"[status] from {first:%Y-%m-%d} to {last:%Y-%m-%d} (UTC)")
+    print(f"[status] saved {out_path}")
+    return status
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--data-dir", type=Path, default=FULL_DIR,
@@ -143,10 +209,15 @@ def main() -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
+    stations = None
     if "stations" in args.steps:
-        extract_stations(args.data_dir, args.out_dir)
+        stations = extract_stations(args.data_dir, args.out_dir)
     if "trips" in args.steps:
         extract_trips(args.data_dir, args.out_dir)
+    if "status" in args.steps:
+        if stations is None:  # reuse the stations saved by an earlier run
+            stations = pd.read_parquet(args.out_dir / "stations.parquet")
+        extract_status(args.data_dir, args.out_dir, set(stations["station_id"]))
 
 
 if __name__ == "__main__":
