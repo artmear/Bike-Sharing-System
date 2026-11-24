@@ -29,6 +29,7 @@ globals [
   ;; input data
   demand-rates       ; table: station-id + hour -> trips per hour
   destination-probs  ; table: (list origin-id band) -> list of [dest-id prob]
+  band-of-hour       ; list of 24 band names, item h = band of hour h
   ;; metric counters
   n-requests         ; rental requests
   n-no-bike          ; gave up: no bike nearby

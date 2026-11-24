@@ -3,8 +3,65 @@
 ;; Generates user trip requests (when they happen, where they start and
 ;; where they end) and moves the users while they ride.
 
+;; ---------------------------------------------------------------------------
+;; Setup: load the input tables built by Python/build_inputs.py
+;; ---------------------------------------------------------------------------
+
 to setup-demand
+  load-demand-rates
+  load-bands
+  load-destinations
 end
+
+;; demand-rates: (list station-id hour) -> requests per hour
+to load-demand-rates
+  set demand-rates table:make
+  let rows csv:from-file "data/demand_rates.csv"
+  let header first rows
+  foreach but-first rows [ row ->
+    let key (list (column row header "station_id") (column row header "hour"))
+    table:put demand-rates key (column row header "rate_per_hour")
+  ]
+end
+
+;; band-of-hour: list of 24 band names, e.g. item 8 = "morning"
+to load-bands
+  let rows csv:from-file "data/bands.csv"
+  let header first rows
+  let by-hour sort-by [ [a b] -> column a header "hour" < column b header "hour" ] but-first rows
+  set band-of-hour map [ row -> column row header "band" ] by-hour
+end
+
+;; destination-probs: (list origin-id band) -> list of [dest-id prob],
+;; most likely destination first (the CSV is already sorted that way).
+to load-destinations
+  set destination-probs table:make
+  let rows csv:from-file "data/destinations.csv"
+  let header first rows
+  foreach but-first rows [ row ->
+    let key (list (column row header "origin_id") (column row header "band"))
+    let entry (list (column row header "dest_id") (column row header "prob"))
+    table:put destination-probs key lput entry (table:get-or-default destination-probs key [])
+  ]
+end
+
+;; ---------------------------------------------------------------------------
+;; Lookups
+;; ---------------------------------------------------------------------------
+
+;; Requests per hour at station stn at the current hour.
+to-report current-rate [ stn ]
+  report table:get demand-rates (list [station-id] of stn hour-of-day)
+end
+
+;; Time band of the current hour ("morning", "midday", "evening", "night").
+to-report current-band
+  report item hour-of-day band-of-hour
+end
+
+;; ---------------------------------------------------------------------------
+;; Each tick
+;; ---------------------------------------------------------------------------
 
 to generate-demand
 end
