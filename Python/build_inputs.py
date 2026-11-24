@@ -4,8 +4,9 @@ Inputs are the parquet files from extract_bilbao.py, restricted to the
 days chosen by days.py and cleaned by clean.py.
 
 Outputs so far:
-- stations.csv: station_id, name, xcor, ycor, capacity, initial_bikes, zone
-- params.csv:   name, value (one parameter per row)
+- stations.csv:     station_id, name, xcor, ycor, capacity, initial_bikes, zone
+- params.csv:       name, value (one parameter per row)
+- demand_rates.csv: station_id, hour, rate_per_hour
 
 Usage (from the repo root):
 
@@ -14,6 +15,7 @@ Usage (from the repo root):
 """
 
 import argparse
+from functools import cache
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +28,11 @@ from config import (CENTER_LAT, CENTER_LON, DETOUR_FACTOR, NETLOGO_DATA_DIR,
                     WORLD_MIN_PYCOR)
 from days import selected_days
 
-STEPS = ["stations"]
+STEPS = ["stations", "demand"]
+
+# Demand correction: minimum hours with a bike available (summed over all
+# selected days) for a station-hour to get the corrected rate.
+MIN_AVAILABLE_H = 2.0
 
 # Meters per degree (equirectangular approximation, fine at city scale).
 M_PER_DEG_LAT = 110_574
@@ -59,25 +65,48 @@ def fit_to_world(x_m: pd.Series, y_m: pd.Series) -> tuple[pd.Series, pd.Series, 
     return xcor, ycor, meters_per_patch
 
 
-def bikes_at_midnight(station_ids: pd.Series) -> pd.Series:
-    """Mean docked bikes at 00:00 over the selected days, per station.
+@cache
+def bikes_per_minute() -> pd.DataFrame:
+    """Docked bikes at every minute of every selected day, per station.
 
-    Snapshots are only written when something changes, so the count at
-    00:00 is the last snapshot at or before midnight.
+    Columns: station_id, day, minute (0..1439), hour (0..23), bikes.
+    About 43 stations x 16 days x 1440 minutes = 1M rows.
+
+    Snapshots are only written when something changes, so the count at a
+    given minute is the last snapshot at or before it (merge_asof
+    "backward"). Computed once and reused (@cache).
     """
     status = (pd.read_parquet(PROCESSED_DIR / "station_status.parquet",
                               columns=["station_id", "time", "bikes"])
               .sort_values("time"))
-    midnights = pd.DataFrame({"time": [
-        int(pd.Timestamp(d, tz=TIMEZONE).timestamp()) for d in selected_days()
-    ]})
+    station_ids = pd.read_parquet(PROCESSED_DIR / "stations.parquet")["station_id"]
+    days = selected_days()
 
-    means = {}
+    grid = pd.DataFrame({
+        "day": np.repeat(days, 1440),
+        "minute": np.tile(np.arange(1440), len(days)),
+        "time": np.concatenate([
+            int(pd.Timestamp(d, tz=TIMEZONE).timestamp()) + 60 * np.arange(1440)
+            for d in days
+        ]),
+    })
+    grid["hour"] = grid["minute"] // 60
+
+    parts = []
     for sid in station_ids:
-        snaps = status[status["station_id"] == sid][["time", "bikes"]]
-        at_00 = pd.merge_asof(midnights, snaps, on="time", direction="backward")
-        means[sid] = at_00["bikes"].astype(float).mean()
-    return pd.Series(means)
+        snaps = status.loc[status["station_id"] == sid, ["time", "bikes"]]
+        part = pd.merge_asof(grid, snaps, on="time", direction="backward")
+        part["station_id"] = sid
+        parts.append(part)
+    out = pd.concat(parts, ignore_index=True)
+    out["bikes"] = out["bikes"].astype(float)
+    return out[["station_id", "day", "minute", "hour", "bikes"]]
+
+
+def bikes_at_midnight() -> pd.Series:
+    """Mean docked bikes at 00:00 over the selected days, per station."""
+    grid = bikes_per_minute()
+    return grid[grid["minute"] == 0].groupby("station_id")["bikes"].mean()
 
 
 def build_stations(out_dir: Path) -> tuple[pd.DataFrame, float]:
@@ -89,7 +118,7 @@ def build_stations(out_dir: Path) -> tuple[pd.DataFrame, float]:
     dist_center = np.hypot(x_m, y_m)
     zone = np.where(dist_center <= dist_center.median(), "center", "periphery")
 
-    mean_00 = bikes_at_midnight(stations["station_id"]).loc[stations["station_id"]].to_numpy()
+    mean_00 = bikes_at_midnight().loc[stations["station_id"]].to_numpy()
     initial = np.minimum(np.round(mean_00), stations["capacity"]).astype(int)
 
     out = pd.DataFrame({
@@ -143,6 +172,58 @@ def build_params(out_dir: Path, meters_per_patch: float) -> pd.DataFrame:
     return params
 
 
+def build_demand_rates(out_dir: Path) -> pd.DataFrame:
+    """Rental requests per hour, per station and hour of day.
+
+    Correction for censored demand: trips.csv only has rentals that
+    happened. When a station is empty, people who wanted a bike there
+    leave no trace. So instead of
+        rate = trips started / number of days
+    we use
+        rate = trips started / hours the station had at least one bike
+    which assumes that, within the same hour of day, demand while the
+    station is empty is the same as while it has bikes.
+
+    Cells with less than MIN_AVAILABLE_H of availability (summed over all
+    days) would give unstable rates, so they keep the uncorrected rate.
+
+    Also saves Data/processed/demand_rates_detail.csv (trips, available
+    hours, raw and corrected rate) for the report.
+    """
+    grid = bikes_per_minute()
+    n_days = grid["day"].nunique()
+    avail_h = ((grid["bikes"] > 0)
+               .groupby([grid["station_id"], grid["hour"]]).sum() / 60
+               ).rename("available_h")
+
+    trips = load_study_trips()
+    n_trips = (trips.groupby([trips["station_id_start"].astype("int64"),
+                              trips["start"].dt.hour]).size()
+               .rename_axis(["station_id", "hour"]).rename("trips"))
+
+    detail = pd.concat([avail_h, n_trips], axis=1).fillna({"trips": 0}).reset_index()
+    detail["raw_rate"] = detail["trips"] / n_days
+    detail["corrected"] = detail["available_h"] >= MIN_AVAILABLE_H
+    detail["rate_per_hour"] = np.where(
+        detail["corrected"],
+        detail["trips"] / detail["available_h"].clip(lower=MIN_AVAILABLE_H),
+        detail["raw_rate"],
+    )
+    detail.round(4).to_csv(PROCESSED_DIR / "demand_rates_detail.csv", index=False)
+
+    out = detail[["station_id", "hour", "rate_per_hour"]].round(4)
+    out_path = out_dir / "demand_rates.csv"
+    out.to_csv(out_path, index=False)
+
+    raw_day, corr_day = detail["raw_rate"].sum(), detail["rate_per_hour"].sum()
+    print(f"[demand] {len(out)} rows ({out['station_id'].nunique()} stations x 24 hours)")
+    print(f"[demand] stations have a bike {detail['available_h'].sum() / (n_days * len(out)):.1%} "
+          f"of the time; {(~detail['corrected']).sum()} cells under {MIN_AVAILABLE_H} h kept raw")
+    print(f"[demand] requests per day: raw {raw_day:.0f}, corrected {corr_day:.0f} "
+          f"(+{corr_day / raw_day - 1:.1%})")
+    print(f"[demand] saved {out_path}")
+    return out
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out-dir", type=Path, default=NETLOGO_DATA_DIR,
@@ -155,6 +236,8 @@ def main() -> None:
     if "stations" in args.steps:
         _, meters_per_patch = build_stations(args.out_dir)
         build_params(args.out_dir, meters_per_patch)
+    if "demand" in args.steps:
+        build_demand_rates(args.out_dir)
 
 
 if __name__ == "__main__":
