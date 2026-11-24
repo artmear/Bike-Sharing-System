@@ -3,8 +3,63 @@
 ;; Creates the stations and handles bike pick-ups and returns.
 ;; Design rule: n-bikes is only changed by the procedures in this file.
 
+;; ---------------------------------------------------------------------------
+;; Setup
+;; ---------------------------------------------------------------------------
+
+;; Read data/params.csv and data/stations.csv (built by Python/build_inputs.py)
+;; and create one station agent per row.
 to setup-stations
+  load-params
+
+  let rows csv:from-file "data/stations.csv"
+  let header first rows
+  foreach but-first rows [ row ->
+    create-stations 1 [
+      set station-id    column row header "station_id"
+      set station-name  column row header "name"
+      setxy (column row header "xcor") (column row header "ycor")
+      set capacity      column row header "capacity"
+      set max-bikes     column row header "max_bikes"
+      set n-bikes       column row header "initial_bikes"
+      set zone          column row header "zone"
+      set minutes-empty 0
+      set minutes-full  0
+      set shape "circle"
+      set size 1 + capacity / 15   ; 17 docks -> 2.1 patches, 42 docks -> 3.8
+    ]
+  ]
+  update-station-colors
 end
 
+;; params.csv has one "name,value" pair per row.
+to load-params
+  let params table:from-list but-first csv:from-file "data/params.csv"
+  set meters-per-patch table:get params "meters_per_patch"
+  set ride-speed-mps   table:get params "ride_speed_mps"
+  set detour-factor    table:get params "detour_factor"
+end
+
+;; Value of a CSV column by its header name, so the code does not depend
+;; on the column order.
+to-report column [ row header col-name ]
+  report item (position col-name header) row
+end
+
+;; ---------------------------------------------------------------------------
+;; Display
+;; ---------------------------------------------------------------------------
+
+;; red    = empty, no bike to rent
+;; green  = bikes and free docks
+;; yellow = all docks taken, bikes left as overflow
+;; blue   = full up to max-bikes, returns are redirected
 to update-station-colors
+  ask stations [
+    set color (ifelse-value
+      n-bikes = 0          [ red ]
+      n-bikes >= max-bikes [ blue ]
+      n-bikes >= capacity  [ yellow ]
+                           [ green ])
+  ]
 end

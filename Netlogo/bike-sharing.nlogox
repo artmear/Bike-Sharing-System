@@ -43,7 +43,8 @@ breed [ trucks truck ]     ; rebalancing trucks
 
 stations-own [
   station-id         ; original dataset id
-  capacity           ; bike_racks + special_racks (physical docks)
+  station-name       ; e.g. "13-LEIZAOLA"
+  capacity         ; bike_racks + special_racks (physical docks)
   max-bikes          ; docks + overflow: bikes can still be left until this limit
   n-bikes            ; bikes at the station now (only changed in stations.nls)
   zone               ; "center" or "periphery"
